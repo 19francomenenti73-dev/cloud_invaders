@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Cloud Invaders - Nowcasting Italia</title>
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+    <style>
+        * {
+            box-sizing: border-box;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        body {
+            background-color: #0b0b12;
+            color: #00ffcc;
+            font-family: 'Press Start 2P', monospace;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            overflow: hidden;
+        }
+        #game-container {
+            position: relative;
+            width: 100%;
+            max-width: 600px;
+            height: 700px;
+            background: #000;
+            border: 4px solid #1f2937;
+            box-shadow: 0 0 20px rgba(0, 255, 204, 0.2);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        canvas {
+            display: block;
+            background: #050508;
+            width: 100%;
+            height: 100%;
+        }
+        /* Effetto Scanlines CRT */
+        #game-container::after {
+            content: " ";
+            display: block;
+            position: absolute;
+            top: 0; left: 0; bottom: 0; right: 0;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+            z-index: 10;
+            background-size: 100% 4px, 6px 100%;
+            pointer-events: none;
+        }
+        .controls {
+            display: flex;
+            justify-content: space-between;
+            width: 100%;
+            max-width: 600px;
+            padding: 10px;
+            background: #111;
+        }
+        .btn {
+            background: #1f2937;
+            color: #00ffcc;
+            border: 2px solid #00ffcc;
+            font-family: 'Press Start 2P', monospace;
+            font-size: 14px;
+            padding: 15px 20px;
+            flex: 1;
+            margin: 0 5px;
+            text-align: center;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+        .btn:active {
+            background: #00ffcc;
+            color: #000;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <canvas id="gameCanvas" width="600" height="700"></canvas>
+    </div>
+    
+    <div class="controls">
+        <button class="btn" id="leftBtn">&larr;</button>
+        <button class="btn" id="fireBtn">FUOCO</button>
+        <button class="btn" id="rightBtn">&rarr;</button>
+    </div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+// Game States: START, PLAYING, LEVEL_COMPLETE, GAMEOVER, VICTORY
+let gameState = 'START';
+let score = 0;
+let highscore = 99999;
+let lives = 2;
+let level = 1;
+
+// Player
+let player = {
+    x: 275,
+    y: 620,
+    width: 40,
+    height: 25,
+    speed: 6,
+    dx: 0
+};
+
+// Bullets
+let bullets = [];
+let enemyBullets = [];
+
+// Enemies (Clouds)
+let enemies = [];
+let enemyDirection = 1;
+let enemySpeed = 1;
+
+// Barriers (Bomba d'acqua)
+let barriers = [];
+
+// Input controls
+let keys = {};
+
+window.addEventListener('keydown', e => {
+    keys[e.code] = true;
+    if (e.code === 'Space') {
+        if (gameState === 'START' || gameState === 'GAMEOVER' || gameState === 'VICTORY') {
+            resetGame();
+        } else if (gameState === 'PLAYING') {
+            shootBullet();
+        }
+        e.preventDefault();
+    }
+});
+
+window.addEventListener('keyup', e => {
+    keys[e.code] = false;
+});
+
+// Touch controls for mobile
+document.getElementById('leftBtn').addEventListener('touchstart', () => { keys['ArrowLeft'] = true; });
+document.getElementById('leftBtn').addEventListener('touchend', () => { keys['ArrowLeft'] = false; });
+document.getElementById('rightBtn').addEventListener('touchstart', () => { keys['ArrowRight'] = true; });
+document.getElementById('rightBtn').addEventListener('touchend', () => { keys['ArrowRight'] = false; });
+document.getElementById('fireBtn').addEventListener('touchstart', () => { 
+    if (gameState === 'START' || gameState === 'GAMEOVER' || gameState === 'VICTORY') {
+        resetGame();
+    } else {
+        shootBullet(); 
+    }
+});
+
+function initLevel() {
+    enemies = [];
+    let rows = 4;
+    let cols = 8;
+    for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+            enemies.push({
+                x: 60 + c * 60,
+                y: 80 + r * 45,
+                width: 40,
+                height: 25,
+                type: r, // Different cloud types
+                alive: true
+            });
+        }
+    }
+
+    // Fortini "Bomba d'acqua"
+    barriers = [
+        { x: 80, y: 520, width: 80, health: 4 },
+        { x: 260, y: 520, width: 80, health: 4 },
+        { x: 440, y: 520, width: 80, health: 4 }
+    ];
+
+    enemySpeed = 1 + (level * 0.5);
+}
+
+function resetGame() {
+    score = 0;
+    lives = 2;
+    level = 1;
+    gameState = 'PLAYING';
+    initLevel();
+}
+
+function shootBullet() {
+    if (bullets.length < 3) {
+        bullets.push({
+            x: player.x + player.width / 2 - 2,
+            y: player.y,
+            width: 4,
+            height: 12,
+            speed: 8
+        });
+    }
+}
+
+function update() {
+    if (gameState !== 'PLAYING') return;
+
+    // Player movement
+    if (keys['ArrowLeft'] || keys['KeyA']) {
+        player.x -= player.speed;
+    }
+    if (keys['ArrowRight'] || keys['KeyD']) {
+        player.x += player.speed;
+    }
+    if (player.x < 10) player.x = 10;
+    if (player.x > canvas.width - player.width - 10) player.x = canvas.width - player.width - 10;
+
+    // Bullets update
+    bullets.forEach((b, index) => {
+        b.y -= b.speed;
+        if (b.y < 0) bullets.splice(index, 1);
+    });
+
+    // Enemy bullets update
+    enemyBullets.forEach((eb, index) => {
+        eb.y += eb.speed;
+        // Collision with player
+        if (eb.x < player.x + player.width && eb.x + eb.width > player.x &&
+            eb.y < player.y + player.height && eb.y + eb.height > player.y) {
+            enemyBullets.splice(index, 1);
+            lives--;
+            if (lives < 0) {
+                gameState = 'GAMEOVER';
+            }
+        }
+        // Collision with barriers
+        barriers.forEach(bar => {
+            if (eb.x < bar.x + bar.width && eb.x + eb.width > bar.x &&
+                eb.y < bar.y + 30 && eb.y + eb.height > bar.y) {
+                enemyBullets.splice(index, 1);
+                bar.health--;
+            }
+        });
+        if (eb.y > canvas.height) enemyBullets.splice(index, 1);
+    });
+
+    // Bullets vs Enemies & Barriers collision
+    bullets.forEach((b, bIndex) => {
+        // Barriers check
+        barriers.forEach(bar => {
+            if (b.x < bar.x + bar.width && b.x + b.width > bar.x &&
+                b.y < bar.y + 30 && b.y + b.height > bar.y) {
+                bullets.splice(bIndex, 1);
+                bar.health--;
+            }
+        });
+
+        // Enemies check
+        enemies.forEach(en => {
+            if (en.alive && b.x < en.x + en.width && b.x + b.width > en.x &&
+                b.y < en.y + en.height && b.y + b.height > en.y) {
+                en.alive = false;
+                bullets.splice(bIndex, 1);
+                score += (3 - en.type) * 50;
+
+                // Check level clear
+                if (enemies.every(e => !e.alive)) {
+                    if (level < 3) {
+                        level++;
+                        initLevel();
+                    } else {
+                        gameState = 'VICTORY';
+                    }
+                }
+            }
+        });
+    });
+
+    // Move Enemies
+    let hitEdge = false;
+    enemies.forEach(en => {
+        if (!en.alive) return;
+        en.x += enemySpeed * enemyDirection;
+        if (en.x > canvas.width - 50 || en.x < 10) {
+            hitEdge = true;
+        }
+    });
+
+    if (hitEdge) {
+        enemyDirection *= -1;
+        enemies.forEach(en => {
+            en.y += 15;
+            if (en.y >= 500) {
+                gameState = 'GAMEOVER';
+            }
+        });
+    }
+
+    // Enemy shooting randomly (Lightning)
+    if (Math.random() < 0.02 + (level * 0.01)) {
+        let aliveEnemies = enemies.filter(e => e.alive);
+        if (aliveEnemies.length > 0) {
+            let shooter = aliveEnemies[Math.floor(Math.random() * aliveEnemies.length)];
+            enemyBullets.push({
+                x: shooter.x + shooter.width / 2 - 2,
+                y: shooter.y + shooter.height,
+                width: 4,
+                height: 14,
+                speed: 4 + level
+            });
+        }
+    }
+}
+
+function draw() {
+    ctx.fillStyle = '#050508';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    if (gameState === 'START') {
+        ctx.fillStyle = '#00ffcc';
+        ctx.font = '22px "Press Start 2P"';
+        ctx.textAlign = 'center';
+        ctx.fillText('CLOUD INVADERS', canvas.width / 2, 200);
+        
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '10px "Press Start 2P"';
+        ctx.fillText('IL NOWCASTING CONTRO I CIALTRONI', canvas.width / 2, 240);
+        
+        ctx.fillStyle = '#ffcc00';
+        ctx.fillText('PREMI SPACO O TOCCA PER INIZIARE', canvas.width / 2, 420);
+        return;
+    }
+
+    if (gameState === 'GAMEOVER') {
+        ctx.fillStyle = '#ff3333';
+        ctx.font = '26px "Press Start 2P"';
+        ctx.textAlign = 'center';
+        ctx.fillText('GAME OVER', canvas.width / 2, 280);
+        
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '10px "Press Start 2P"';
+        ctx.fillText('PREMI SPAZIO PER RIPROVARE', canvas.width / 2, 360);
+        return;
+    }
+
+    if (gameState === 'VICTORY') {
+        ctx.fillStyle = '#00ffcc';
+        ctx.font = '16px "Press Start 2P"';
+        ctx.textAlign = 'center';
+        ctx.fillText('VITTORIA!', canvas.width / 2, 100);
+
+        ctx.fillStyle = '#ffff00';
+        ctx.font = '9px "Press Start 2P"';
+        let lines = [
+            "BRAVO HAI SCONFITTO",
+            "LE NUVOLE BOMBARDIERE",
+            "E LA BOMBA D'ACQUA",
+            "E ANCHE QUALCHE CIALTRONE"
+        ];
+        lines.forEach((l, i) => {
+            ctx.fillText(l, canvas.width / 2, 180 + (i * 30));
+        });
+
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '9px "Press Start 2P"';
+        ctx.fillText('PREMI SPAZIO PER RIGIOCARE', canvas.width / 2, 450);
+        return;
+    }
+
+    // HUD
+    ctx.fillStyle = '#00ffcc';
+    ctx.font = '9px "Press Start 2P"';
+    ctx.textAlign = 'left';
+    ctx.fillText(`SCORE: ${score}`, 20, 30);
+    ctx.textAlign = 'right';
+    ctx.fillText(`HIGH: ${highscore}`, canvas.width - 20, 30);
+    ctx.fillText(`LIVES: ${lives}   QUADRO: ${level}/3`, canvas.width - 20, 670);
+
+    // Draw Player (Cannon / Omino)
+    ctx.fillStyle = '#00ffcc';
+    ctx.fillRect(player.x + 15, player.y, 10, 10); // testa/cannone
+    ctx.fillRect(player.x, player.y + 10, player.width, 15); // base
+
+    // Draw Bullets
+    ctx.fillStyle = '#ffff00';
+    bullets.forEach(b => ctx.fillRect(b.x, b.y, b.width, b.height));
+
+    // Draw Enemy Bullets (Lightning)
+    ctx.fillStyle = '#ff00ff';
+    enemyBullets.forEach(eb => {
+        ctx.beginPath();
+        ctx.moveTo(eb.x + 2, eb.y);
+        ctx.lineTo(eb.x - 2, eb.y + 7);
+        ctx.lineTo(eb.x + 3, eb.y + 7);
+        ctx.lineTo(eb.x, eb.y + 14);
+        ctx.fillStyle = '#ffff33';
+        ctx.fill();
+    });
+
+    // Draw Enemies (Clouds)
+    enemies.forEach(en => {
+        if (!en.alive) return;
+        ctx.fillStyle = en.type === 0 ? '#99aab5' : (en.type === 1 ? '#7289da' : '#ffffff');
+        // Forma nuvoletta pixel art approssimata
+        ctx.fillRect(en.x + 5, en.y + 8, en.width - 10, en.height - 8);
+        ctx.fillRect(en.x, en.y + 12, en.width, en.height - 14);
+    });
+
+    // Draw Barriers (Bomba d'acqua)
+    barriers.forEach(bar => {
+        if (bar.health > 0) {
+            ctx.fillStyle = `rgba(0, 150, 255, ${bar.health * 0.25})`;
+            ctx.fillRect(bar.x, bar.y, bar.width, 20);
+            ctx.fillStyle = '#ffffff';
+            ctx.font = '7px "Press Start 2P"';
+            ctx.textAlign = 'center';
+            ctx.fillText("BOMBA D'ACQUA", bar.x + bar.width / 2, bar.y + 14);
+        }
+    });
+}
+
+function loop() {
+    update();
+    draw();
+    requestAnimationFrame(loop);
+}
+
+loop();
+</script>
+
+</body>
+</html>
